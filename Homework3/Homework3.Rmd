@@ -1,0 +1,155 @@
+---
+title: "Homework3"
+author: "George Lyu"
+date: '2023-02-09'
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library('splines')        ## for 'bs'
+library('dplyr')          ## for 'select', 'filter', and others
+library('magrittr')       ## for '%<>%' operator
+library('glmnet')         ## for 'glmnet'
+
+```
+
+
+```{r}
+## load prostate data
+prostate <- 
+  read.table(url(
+    'https://web.stanford.edu/~hastie/ElemStatLearn/datasets/prostate.data'))
+```
+
+1. Using the correlation function reproduce the correlation matrix
+```{r}
+cor(prostate)
+```
+
+
+2. Train a least square regression model
+```{r}
+prostate_train_2 <- prostate %>% filter(train == TRUE) %>% select(-train)
+lm(lcavol ~ ., prostate_train_2)
+fit<-lm(lcavol ~ ., prostate_train_2)
+
+```
+
+
+3. Compute the average squared test error
+```{r}
+prostate_test_2<- prostate %>% filter(train == FALSE) %>% select(-train)
+show(prostate_test_2)
+#function to get the squared-error loss
+loss2 <- function(y, yhat){
+  (y-yhat)^2
+}
+
+#function to get the test error
+test_error <- function(data, fit, loss = loss2){
+  mean(loss(data$lcavol, predict(fit, newdata = data)))
+}
+
+test_error(prostate_test_2, fit)
+
+```
+
+
+4. Train a ridge regression model and test on lambda to minimize test error
+
+ANS: As we compare all the error with different lambda values, the lowerst error is when lambda is roughly around 0.1.
+```{r}
+## use glmnet to fit ridge
+## glmnet fits using penalized L2 loss
+## first create an input matrix and output vector
+form  <- lcavol ~  lweight + age + lbph + lcp + pgg45 + lpsa + svi + gleason
+x_inp <- model.matrix(form, data=prostate_train_2)
+y_out <- prostate_train_2$lcavol
+fit <- glmnet(x=x_inp, y=y_out, lambda=seq(0.5, 0, -0.05), alpha = 0)
+print(fit$beta)
+
+
+## functions to compute testing/training error with glmnet
+error <- function(dat, fit, lam, form, loss=loss2) {
+  x_inp <- model.matrix(form, data=dat)
+  y_out <- dat$lcavol
+  y_hat <- predict(fit, newx=x_inp, s=lam)  ## see predict.elnet
+  mean(loss(y_out, y_hat))
+}
+
+## train_error at lambda=0
+error(prostate_train_2, fit, lam=0, form=form)
+
+## testing error at lambda=0
+error(prostate_test_2, fit, lam=0, form=form)
+
+## train_error at lambda=0.03
+error(prostate_train_2, fit, lam=0.03, form=form)
+
+## testing error at lambda=0.03
+error(prostate_test_2, fit, lam=0.03, form=form)
+
+## train_error at lambda=0.05
+error(prostate_train_2, fit, lam=0.05, form=form)
+
+## testing error at lambda=0.05
+error(prostate_test_2, fit, lam=0.05, form=form)
+
+## train_error at lambda=0.1
+error(prostate_train_2, fit, lam=0.1, form=form)
+
+## testing error at lambda=0.1
+error(prostate_test_2, fit, lam=0.1, form=form)
+```
+
+
+5. Figure shows the train and test error
+```{r}
+## compute training and testing errors as function of lambda
+err_train_1 <- sapply(fit$lambda, function(lam) 
+  error(prostate_train_2, fit, lam, form))
+err_test_1 <- sapply(fit$lambda, function(lam) 
+  error(prostate_test_2, fit, lam, form))
+
+## plot test/train error
+plot(x=range(fit$lambda),
+     y=range(c(err_train_1, err_test_1)),
+     xlim=rev(range(fit$lambda)),
+     type='n',
+     xlab=expression(lambda),
+     ylab='train/test error')
+points(fit$lambda, err_train_1, pch=19, type='b', col='darkblue')
+points(fit$lambda, err_test_1, pch=19, type='b', col='darkred')
+legend('topright', c('train','test'), lty=1, pch=19,
+       col=c('darkblue','darkred'), bty='n')
+
+colnames(fit$beta) <- paste('lam =', fit$lambda)
+print(fit$beta %>% as.matrix)
+
+```
+
+
+6. Create a path diagram for ridge regression analysis
+
+```{r}
+## plot path diagram
+plot(x=range(fit$lambda),
+     y=range(as.matrix(fit$beta)),
+     type='n',
+     xlab=expression(lambda),
+     ylab='Coefficients')
+for(i in 1:nrow(fit$beta)) {
+  points(x=fit$lambda, y=fit$beta[i,], pch=19, col='#00000055')
+  lines(x=fit$lambda, y=fit$beta[i,], col='#00000055')
+}
+text(x=0, y=fit$beta[,ncol(fit$beta)], 
+     labels=rownames(fit$beta),
+     xpd=NA, pos=4, srt=45)
+abline(h=0, lty=3, lwd=2)
+```
+
