@@ -1,0 +1,222 @@
+---
+title: "Homework4"
+author: "George Lyu"
+date: '2023-02-23'
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+### 1. Randomly split data into 75% and 25% for training and testing data
+```{r}
+library('MASS') ## for 'mcycle'
+library('manipulate') ## for 'manipulate'
+library("caret")
+set.seed(123)
+
+df <- mcycle
+sample_size = floor(0.75*nrow(df))
+
+# randomly split data in r
+picked = sample(seq_len(nrow(mcycle)),size = sample_size)
+train =df[picked,]
+test =df[-picked,]
+
+```
+
+
+
+### 2. Predicting mean acceleration as a function of time with NW and KNN kernel function by varying the tuning parameter over a sequence of values.
+```{r}
+y <- train$accel
+x <- matrix(train$times, length(train$times), 1)
+
+y_test<-test$accel
+x_test <- matrix(test$times, length(test$times), 1)
+
+
+## k-NN kernel function
+## x  - n x p matrix of training inputs
+## x0 - 1 x p input where to make prediction
+## k  - number of nearest neighbors
+kernel_k_nearest_neighbors <- function(x, x0, k1=1) {
+  ## compute distance betwen each x and x0
+  z <- t(t(x) - x0)
+  d <- sqrt(rowSums(z*z))
+
+  ## initialize kernel weights to zero
+  w <- rep(0, length(d))
+  
+  ## set weight to 1 for k nearest neighbors
+  w[order(d)[1:k1]] <- 1
+  
+  return(w)
+}
+
+## Make predictions using the NW method
+## y  - n x 1 vector of training outputs
+## x  - n x p matrix of training inputs
+## x0 - m x p matrix where to make predictions
+## kern  - kernel function to use
+## ... - arguments to pass to kernel function
+nadaraya_watson <- function(y, x, x0, kern, ...) {
+  k <- t(apply(x0, 1, function(x0_) {
+    k_ <- kern(x, x0_, ...)
+    k_/sum(k_)
+  }))
+  yhat <- drop(k %*% y)
+  attr(yhat, 'k') <- k
+  return(yhat)
+}
+
+## varying parameters of k from 1 to 15
+
+y_predicting<-rep(NA, 15)
+
+for(i in 1:15){
+  y_predicting[i] <- nadaraya_watson(y = y, x = x, x0 = x_test, kern = kernel_k_nearest_neighbors, k1 = i)
+}
+
+show(y_predicting)
+
+```
+
+
+
+### 3. compute and plot the training error, AIC, BIC, and validation error (using the validation data) as functions of the tuning parameter
+
+As we could see from the plot down below, AIC and BIC are overlapped while validation error have a overall downwards trend and stable after k = 4
+```{r}
+## Compute effective df using NW method
+## y  - n x 1 vector of training outputs
+## x  - n x p matrix of training inputs
+## kern  - kernel function to use
+## ... - arguments to pass to kernel function
+effective_df <- function(y, x, kern, ...) {
+  y_hat <- nadaraya_watson(y, x, x,
+    kern=kern, ...)
+  sum(diag(attr(y_hat, 'k')))
+}
+
+## loss function
+## y    - train/test y
+## yhat - predictions at train/test x
+loss_squared_error <- function(y, yhat)
+  (y - yhat)^2
+
+## test/train error
+## y    - train/test y
+## yhat - predictions at train/test x
+## loss - loss function
+error <- function(y, yhat, loss=loss_squared_error)
+  mean(loss(y, yhat))
+
+## AIC
+## y    - training y
+## yhat - predictions at training x
+## d    - effective degrees of freedom
+aic <- function(y, yhat, d)
+  error(y, yhat) + 2/length(y)*d
+
+## BIC
+## y    - training y
+## yhat - predictions at training x
+## d    - effective degrees of freedom
+bic <- function(y, yhat, d)
+  error(y, yhat) + log(length(y))/length(y)*d
+
+## setting up 15 different ks
+k <- seq(1,15,1)
+
+aic2 <- rep(NA, 15)
+bic2 <- rep(NA, 15)
+train_error <- rep(NA, 15)
+validation_error <- rep(NA, 15)
+
+## using for loops to record the potential records for all aics, bics, and validation error 
+for(i in 1:15){
+  edf <- effective_df(y, x, kernel_k_nearest_neighbors, k1=k[i])
+  y_predict <- nadaraya_watson(y = y,x = x,x0 = x, kern = kernel_k_nearest_neighbors, k1 = k[i])
+  y_predict_test <- nadaraya_watson(y = y,x = x,x0 = x_test, kern = kernel_k_nearest_neighbors, k1 = k[i])
+  aic2[i] <- aic(y, y_predict,edf)
+  bic2[i] <- bic(y, y_predict,edf)
+  train_error[i] <- error(y, y_predict)
+  validation_error[i] <- error(y_test, y_predict_test)
+}
+
+## plotting
+plot(k, train_error)
+
+lines(k, validation_error, col = "red")
+lines(k, aic2, col ="blue")
+lines(k, bic2, col = "green")
+```
+
+
+
+### 4. Performing 5-fold cross-validation with combined training and validation data
+
+```{r}
+# Question 4 - five-fold CV
+set.seed(42)
+y_folds <- createFolds(y, k = 5)
+
+# combine dataset to avoid formatting issue
+df2 <- list(x1 = x[,1], x2 = 1:length(x), y = y)
+
+cv_nw <- function(k = 5){
+ans <- rep(NA, 5)
+for(i in 1:5){
+  
+  y_train <- df2$y[-y_folds[[i]]]
+  y_test <- df2$y[y_folds[[i]]]
+  
+  x1_train <- df2$x1[-y_folds[[i]]]
+  x2_train <- df2$x2[-y_folds[[i]]]
+  
+  x1_test <- df2$x1[y_folds[[i]]]
+  x2_test <- df2$x2[y_folds[[i]]]
+  
+  x_train <- matrix(c(x1_train, x2_train), length(x1_train), 1)
+  x_test <- matrix(c(x1_test, x2_test), length(x1_test), 1)
+  
+  ## using nw with kernel to predict
+  y_hat_test <- nadaraya_watson(y_train, x_train, x_test, kern = kernel_k_nearest_neighbors, k = k)
+  
+  ans[i] <- error(y_test, y_hat_test)
+}
+
+return(ans)
+}
+```
+
+
+
+### 5. Plot the CV-estimated test error (average of the five estimates from each fold) as a function of the tuning parameter.
+```{r}
+## Compute 5-fold CV for kNN = 1:20
+cverrs <- sapply(1:20, cv_nw)
+print(cverrs) ## rows are k-folds (1:5), cols are kNN (1:20)
+cverrs_mean <- apply(cverrs, 2, mean)
+cverrs_sd   <- apply(cverrs, 2, sd)
+show(cverrs_sd)
+## Plot the results of 5-fold CV for kNN = 1:20
+plot(x=1:20, y=cverrs_mean, 
+     ylim=range(cverrs),
+     xlab="'k' in kNN", ylab="CV Estimate of Test Error")
+segments(x0=1:20, x1=1:20,
+         y0=cverrs_mean-cverrs_sd,
+         y1=cverrs_mean+cverrs_sd)
+best_idx <- which.min(cverrs_mean)
+points(x=best_idx, y=cverrs_mean[best_idx], pch=20)
+abline(h=cverrs_mean[best_idx] + cverrs_sd[best_idx], lty=3)
+```
+
+
+### 6. Interpret the resulting figures and select a suitable value for the tuning parameter.
+
+As we could see from the plot from question 3 and question 5, when k = 8, the validation error (testing error) is the smallest. While when k = 8 to k = 12, cv estimated error is almost the same. Therefore, we will choose k = 8 as the most suitable model as the AIC and BIC is high with the smallest testing error.
